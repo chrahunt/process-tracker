@@ -1,0 +1,8 @@
+/.tox/
+/*.egg-info/
+/_skbuild/
+/build/
+/dist/
+/MANIFEST
+*.so
+__pycache__/
