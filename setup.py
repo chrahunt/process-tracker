@@ -8,7 +8,7 @@ with open("README.md", "r") as f:
 
 
 setup(
-    name="track-new",
+    name="process-tracker",
     version="0.1.0",
 
     author="Chris Hunt",
@@ -32,11 +32,13 @@ setup(
         ],
     },
     description="Track child processes.",
+    include_package_data=True,
     long_description=long_description,
     long_description_content_type="text/markdown",
     package_data={
-        '': ['pyproject.toml'],
+        '': ['pyproject.toml', '*.pxd'],
     },
-    packages=find_packages(),
-    url="https://github.com/chrahunt/track-new",
+    package_dir={'': 'src'},
+    packages=find_packages("src"),
+    url="https://github.com/chrahunt/process-tracker",
 )

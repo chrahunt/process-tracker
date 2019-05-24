@@ -6,12 +6,46 @@
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+// From snprintf(3)
+char * str_print( const char * fmt, ... )
+{
+    int size = 0;
+    char *p = NULL;
+    va_list ap;
+
+    /* Determine required size */
+
+   va_start(ap, fmt);
+   size = vsnprintf(p, size, fmt, ap);
+   va_end(ap);
+
+   if (size < 0)
+	   return NULL;
+
+   size++;             /* For '\0' */
+   p = malloc(size);
+   if (p == NULL)
+	   return NULL;
+
+   va_start(ap, fmt);
+   size = vsnprintf(p, size, fmt, ap);
+   va_end(ap);
+
+   if (size < 0) {
+	   free(p);
+	   return NULL;
+   }
+
+   return p;
+}
 
 void print_error(
     const char * file,
@@ -40,6 +74,7 @@ void slurp_file( const char * path, char ** out, size_t * size )
     *out = NULL;
     *size = 0;
     const size_t block_size = 1024;
+    // `size` bytes have been written to `out`
     while ( !feof( file ) )
     {
         *size += block_size;
@@ -65,8 +100,7 @@ void slurp_file( const char * path, char ** out, size_t * size )
 
 unsigned long long int get_start_time( pid_t pid )
 {
-    char stat_path[32];
-    snprintf( stat_path, sizeof( stat_path ), "/proc/%d/stat", pid );
+    char * stat_path = str_print( "/proc/%d/stat", pid );
 
     char * contents = NULL;
     size_t size = 0;
@@ -89,25 +123,20 @@ unsigned long long int get_start_time( pid_t pid )
     unsigned long long int out = strtoull( field, NULL, 10 );
     CHECK( out == ULLONG_MAX && errno == ERANGE, "parsing time" );
 
+    free( stat_path );
     free( contents );
 
     return out;
 }
-
-#define LEN(v) strlen( #v )
-#define PID_MAX_LIMIT_LEN LEN(PID_MAX_LIMIT)
 
 void write_identity()
 {
     char * dir_path = getenv( "SHIM_PID_DIR" );
     if ( dir_path == NULL ) return;
 
-    pid_t  pid = getpid();
-    size_t len = strlen( dir_path );
-    len += PID_MAX_LIMIT_LEN;
-    len += 6;
-    char * tmp_path = malloc( len );
-    snprintf( tmp_path, len, "%s/%d.tmp", dir_path, pid );
+    pid_t pid = getpid();
+    char * tmp_path = str_print( "%s/%d.tmp", dir_path, pid );
+    CHECK( tmp_path == NULL, "creating tmp_path" );
 
     FILE * file = fopen( tmp_path, "w" );
     CHECK( file == NULL, "opening output" );
@@ -118,10 +147,8 @@ void write_identity()
     int result = fclose( file );
     CHECK( result != 0, "closing output" );
 
-    char * path = malloc( len - 4 );
-    CHECK( path == NULL, "malloc" );
-    strncpy( path, tmp_path, len - 4 );
-    path[len - 4] = 0;
+    char * path = str_print( "%s/%d", dir_path, pid );
+    CHECK( path == NULL, "creating path" );
 
     result = rename( tmp_path, path );
     CHECK( result == -1, "rename" );
