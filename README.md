@@ -71,3 +71,13 @@ gdb debugging of sub-processes.
 
 1. As above
 1. `make debug`
+
+## Debugging tests without rebuild
+
+1. As above
+1. `.venv/bin/python -m pip install . .[dev]`
+
+Then
+
+* `pip install . && pytest` when rebuild is needed
+* `pytest` when only tests changed

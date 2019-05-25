@@ -26,6 +26,7 @@ setup(
             "Cython",
             "ninja",
             "pytest",
+            "pytest-forked",
             "scikit-build",
             "setuptools",
             "tox",

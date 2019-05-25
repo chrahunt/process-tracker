@@ -20,6 +20,10 @@ def enabled_tracking():
             p.unlink()
 
 
+def noop():
+    pass
+
+
 def target(q, level):
     q.put(os.getpid())
     if level == 0:
@@ -27,6 +31,24 @@ def target(q, level):
     p = multiprocessing.Process(target=target, args=(q, level - 1,))
     p.start()
     p.join()
+
+
+def test_tests_work():
+    assert True
+
+
+def test_child_is_tracked():
+    with enabled_tracking():
+        p = multiprocessing.Process(target=noop)
+        p.start()
+        p.join()
+
+        assert p.exitcode == 0
+
+        tracked_children = process_tracker.children()
+
+    assert len(tracked_children) == 1
+    assert tracked_children[0][0] == p.pid
 
 
 def test_descendants_are_tracked():
@@ -50,8 +72,6 @@ def test_descendants_are_tracked():
     assert sorted(pids) == tracked_pids
 
 
-def noop():
-    pass
 
 
 def test_immediate_child_processes_are_seen():

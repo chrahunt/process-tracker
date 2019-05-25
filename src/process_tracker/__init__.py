@@ -16,7 +16,6 @@ __all__ = ['install', 'children']
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG)
 
 
 _stack = ExitStack()
@@ -72,7 +71,7 @@ def install():
 
     os.environ['SHIM_PID_DIR'] = _pid_dir
     os.environ['LD_PRELOAD'] = str(
-        _close_atexit(path('track_new._lib', 'libpreload.so'))
+        _close_atexit(path('process_tracker._lib', 'libpreload.so'))
     )
 
     logger.debug('LD_PRELOAD path: %s', os.environ['LD_PRELOAD'])
@@ -88,7 +87,7 @@ def children() -> List[Tuple[int, float]]:
     Returns:
         (pid, start time) for all known children
     """
-    assert _pid_dir, 'track_new.install() must be called before children()'
+    assert _pid_dir, 'process_tracker.install() must be called before children()'
 
     result = []
     for p in Path(_pid_dir).glob('*'):

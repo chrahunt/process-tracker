@@ -6,6 +6,7 @@ C interface to intercept calls to fork and clone.
 import ctypes
 import errno
 import inspect
+import io
 import logging
 import os
 
@@ -20,11 +21,12 @@ cimport plthook
 
 from contextlib import contextmanager
 from cpython.exc cimport PyErr_Format
-from libc.stdint cimport uint16_t, uint32_t, uint64_t
 from libc.stdlib cimport malloc
+from libc.string cimport strlen, strncmp
 from posix.types cimport pid_t
 from posix.unistd cimport fork
 
+from .includes cimport elf
 from .utils cimport write_identity
 
 
@@ -35,56 +37,8 @@ logger.propagate = False
 __all__ = ['install']
 
 
-cdef extern from "elf.h":
-    ctypedef uint16_t Elf32_Half
-    ctypedef uint16_t Elf64_Half
-
-    ctypedef uint32_t Elf32_Word
-    ctypedef uint32_t Elf64_Word
-
-    ctypedef uint64_t Elf32_Xword
-    ctypedef uint64_t Elf64_Xword
-
-    ctypedef uint32_t Elf32_Addr
-    ctypedef uint64_t Elf64_Addr
-
-    ctypedef uint32_t Elf32_Off
-    ctypedef uint64_t Elf64_Off
-
-    ctypedef struct Elf32_Ehdr:
-        Elf32_Off e_phoff
-        Elf32_Half e_ehsize
-        Elf32_Half e_phentsize
-        Elf32_Half e_phnum
-
-    ctypedef struct Elf64_Ehdr:
-        Elf64_Off e_phoff
-        Elf64_Half e_ehsize
-        Elf64_Half e_phentsize
-        Elf64_Half e_phnum
-
-    ctypedef struct Elf32_Phdr:
-        Elf32_Word p_type
-        Elf32_Addr p_vaddr
-        Elf32_Word p_memsz
-
-    ctypedef struct Elf64_Phdr:
-        Elf64_Word p_type
-        Elf64_Addr p_vaddr
-        Elf64_Xword p_memsz
-
-
+# TODO: Share definition.
 DEF PT_LOAD = 1
-
-
-ctypedef fused Elf_Ehdr:
-    Elf32_Ehdr
-    Elf64_Ehdr
-
-
-ctypedef fused Elf_Phdr:
-    Elf32_Phdr
-    Elf64_Phdr
 
 
 ctypedef pid_t (*fork_type)()
@@ -100,46 +54,124 @@ cdef void * to_void_p(object ptr):
 ELF_MAGIC = b'\x7fELF'
 
 
+class FileView(io.RawIOBase):
+    """View over a file region.
+    """
+    def __init__(self, file, start, end):
+        fd = os.dup(file.fileno())
+        self._file = os.fdopen(fd, 'rb', buffering=0)
+        self._start = start
+        self._end = end
+        self._length = self._end - self._start
+        self._file.seek(self._start)
+
+    # io API
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb):
+        self.close()
+
+    def close(self):
+        self._file.close()
+
+    @property
+    def closed(self):
+        return self._file.closed
+
+    def fileno(self):
+        return self._file.fileno()
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+    def read(self, size=-1):
+        current_pos = self._file.tell()
+
+        # Always return empty result after end of range.
+        if self._end <= current_pos:
+            return b''
+
+        # If we want the whole range or past the end, then read the rest of the range.
+        if size < 0 or self._end <= current_pos + size:
+            remainder = self._length - (current_pos - self._start)
+            return self._file.read(remainder)
+
+        # Otherwise, just read the file.
+        return self._file.read(size)
+
+    def readable(self):
+        return not self.closed
+
+    def seek(self, offset, whence=io.SEEK_SET):
+        if whence == io.SEEK_SET or whence == 0:
+            offset = self._start + offset
+        elif whence == io.SEEK_CUR or whence == 1:
+            current_pos = self._file.tell()
+            if current_pos - self._start + offset < 0:
+                raise OSError(errno.EINVAL, 'Invalid Operation')
+        elif whence == io.SEEK_END or whence == 2:
+            # XXX: SEEK_END doesn't work for all types of files (e.g. /proc/*),
+            #  that's none of our business though.
+            self._file.seek(0, io.SEEK_END)
+            end = self._file.tell()
+            offset = min(end, self._end)
+            whence = io.SEEK_SET
+
+        self._file.seek(offset, whence)
+
+    def seekable(self):
+        return not self.closed
+
+    def tell(self):
+        return self._file.tell() - self._start
+
+    def writable(self):
+        return False
+
+
 def get_process_maps():
     """Retrieve process map sections.
 
     Yielded values should not be used after generator is exhausted.
     """
-    with open('/proc/self/maps', 'r', encoding='utf-8') as f:
-        lines = f.readlines()
+    Entry = namedtuple('Entry', ['start', 'end', 'length', 'rest', 'line'])
+
+    def get_maps():
+        with open('/proc/self/maps', 'r', encoding='utf-8') as f:
+            for line in f:
+                addresses, protection, rest = line.split(maxsplit=2)
+                if not protection.startswith('r'):
+                    continue
+
+                start, end = [int(v, 16) for v in addresses.split('-')]
+                length = end - start
+
+                yield Entry(start, end, length, rest, line)
 
     with open('/proc/self/mem', 'rb') as f:
-        for line in lines:
-            logger.debug('Processing %s', line)
-
-            addresses, protection, rest = line.split(maxsplit=2)
-            if not protection.startswith('r'):
-                continue
-
-            start, end = [int(v, 16) for v in addresses.split('-')]
-            length = end - start
-
-            logger.debug('Processing %s-%s', hex(start), hex(end))
-
-            if '[vsyscall]' in rest:
+        for entry in get_maps():
+            if '[vsyscall]' in entry.rest:
                 # Skip since the offset is larger than what can be represented
                 # with ssize_t.
                 # Attempting to seek to location in memory fails with EIO.
                 continue
 
-            if '[vvar]' in rest:
+            if '[vvar]' in entry.rest:
                 # Skip due to EIO.
                 continue
 
             try:
-                f.seek(start)
-                view = f.read(length)
+                f.seek(entry.start)
+                view = FileView(f, entry.start, entry.end)
             except:
-                logging.exception(f'Error reading {line}')
+                logging.exception(f'Error reading {entry.line}')
                 raise
             else:
-                # TODO: Lazy-evaluated bytes objects.
-                yield start, BytesIO(view)
+                yield entry.start, view
 
 
 def get_libs():
@@ -157,8 +189,8 @@ def get_lib_pointer(offset, lib):
 
     # Read and cast to ELF header.
     lib.seek(0)
-    data = lib.read(sizeof(Elf64_Ehdr))
-    cdef Elf64_Ehdr * elf_header = <Elf64_Ehdr *>(<char *> data)
+    data = lib.read(sizeof(elf.Elf64_Ehdr))
+    cdef elf.Elf64_Ehdr * elf_header = <elf.Elf64_Ehdr *>(<char *> data)
 
     # Extract values.
     headers_start = elf_header.e_phoff
@@ -166,13 +198,13 @@ def get_lib_pointer(offset, lib):
     header_size = elf_header.e_phentsize
     headers_end = headers_start + num_headers * header_size
 
-    cdef Elf64_Phdr * header = NULL
+    cdef elf.Elf64_Phdr * header = NULL
 
     # Iterate over each program header.
     for pos in range(headers_start, headers_end, header_size):
         lib.seek(pos)
         data = lib.read(header_size)
-        header = <Elf64_Phdr *>(<char *> data)
+        header = <elf.Elf64_Phdr *>(<char *> data)
         if header.p_type == PT_LOAD and header.p_memsz != 0:
             return offset + header.p_vaddr
 
@@ -194,12 +226,36 @@ cdef class CallbackInfo:
     cdef bint re_replaced
 
     # Callable['plthook_t', []]
-    cdef object address_callback
+    cdef object get_hook
+
+    cdef object name
+    """Name of the function overridden."""
 
     def __cinit__(self):
         self.re_replaced = False
 
 
+cdef void * plthook_find(plthook.plthook_t * hook, const char * funcname):
+    """
+    Returns:
+        addr address of the current function or NULL if not found
+    """
+    cdef const char * name
+    cdef void ** addr
+    cdef unsigned int pos = 0
+    cdef size_t funcname_length = strlen(funcname)
+
+    while True:
+        if not plthook.plthook_enum(hook, &pos, &name, &addr):
+            if not strncmp(name, funcname, funcname_length):
+                if name[funcname_length] == 0 or name[funcname_length] == ord('@'):
+                    return addr[0]
+        else:
+            break
+
+    return NULL
+
+        
 def my_fork(object info_arg) -> 'c_int':
     """
     Args:
@@ -219,16 +275,23 @@ def my_fork(object info_arg) -> 'c_int':
     cdef plthook.plthook_t * hook = NULL
     cdef Func f = <Func?> info.self
     cdef void * ptr = f.ptr()
+    cdef void * current_ptr
 
     if not info.re_replaced:
         info.re_replaced = True
-        with info.address_callback() as hook_ptr:
+        with info.get_hook() as hook_ptr:
             hook = <plthook.plthook_t *> to_void_p(hook_ptr)
 
-            if plthook.plthook_replace(
-                hook, "fork", ptr, &info.callback
-            ):
-                _fail('second plthook_replace')
+            current_ptr = plthook_find(hook, "fork")
+
+            if current_ptr == NULL:
+                _fail('plthook_find')
+
+            if current_ptr != ptr:
+                if plthook.plthook_replace(
+                    hook, "fork", ptr, &info.callback
+                ):
+                    _fail('second plthook_replace')
 
     return pid
 
@@ -295,7 +358,6 @@ def plthook_open_by_address(address):
         logger.debug('plthook_open_by_address failed')
         yield None
         return
-        #_fail(f'plthook_open_by_address')
 
     try:
         yield <size_t> hook
@@ -326,6 +388,7 @@ def install():
             ptr = get_lib_pointer(offset, lib)
             if not ptr:
                 continue
+            logger.debug('Pointer value: %d', ptr)
             yield partial(plthook_open_by_address, ptr)
 
     cdef plthook.plthook_t * hook
@@ -339,7 +402,7 @@ def install():
     cdef void * ptr = callback.ptr()
 
     for hook_provider in chain([plthook_open_executable], hook_providers()):
-        callback_info.address_callback = hook_provider
+        callback_info.get_hook = hook_provider
 
         with hook_provider() as hook_ptr:
             if hook_ptr is None:
