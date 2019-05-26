@@ -34,12 +34,12 @@ int __libc_start_main(
     );
 }
 
-/*
 pid_t fork()
 {
     pid_t (*fork_)(void) = dlsym( RTLD_NEXT, "fork" );
     pid_t pid = fork_();
 
+    /* XXX: May race with a fast parent checking active children. */
     if ( pid == 0 )
     {
         write_identity();
@@ -47,7 +47,6 @@ pid_t fork()
 
     return pid;
 }
-*/
 
 typedef int (*clone_type)( int (*)(void *), void *, int, void *, ...);
 

@@ -9,7 +9,7 @@ with open("README.md", "r") as f:
 
 setup(
     name="process-tracker",
-    version="0.1.1",
+    version="0.1.2",
 
     author="Chris Hunt",
     author_email="chrahunt@gmail.com",
