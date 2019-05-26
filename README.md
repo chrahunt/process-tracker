@@ -27,13 +27,19 @@ import process_tracker
 import psutil
 
 
+def get_create_time(ctime):
+    boot_time = psutil.boot_time()
+    clock_ticks = os.sysconf("SC_CLK_TCK")
+    return boot_time + (ctime / clock_ticks)
+
+
 processes = []
 for pid, create_time in process_tracker.children():
     try:
         p = psutil.Process(pid=pid)
     except psutil.NoSuchProcess:
         continue
-    if p.create_time() == create_time:
+    if p.create_time() == get_create_time(create_time):
         processes.append(p)
 
 # processes now has the list of active child processes
