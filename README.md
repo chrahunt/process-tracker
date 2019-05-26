@@ -87,3 +87,16 @@ Then
 
 * `pip install . && pytest` when rebuild is needed
 * `pytest` when only tests changed
+
+
+## Release
+
+```
+docker run \
+    -e REAL_UID=$(id -u) \
+    -e REAL_GID=$(id -g) \
+    -v "$PWD/scripts/build.sh:/build.sh" \
+    -v "$PWD:/src" \
+    dockcross/manylinux1-x64 \
+    sh -c 'cd /src && env "PATH=/opt/python/cp37-cp37m/bin:$PATH" /build.sh'
+```

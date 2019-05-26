@@ -7,6 +7,12 @@ target_include_directories(
         ${CMAKE_CURRENT_LIST_DIR}
 )
 
+set_target_properties(
+    utils
+    PROPERTIES
+        C_STANDARD 99
+)
+
 # Library for preload into child processes.
 add_library(preload SHARED preload.c)
 
@@ -15,6 +21,12 @@ target_link_libraries(
     PRIVATE
         dl
         process_tracker::utils
+)
+
+set_target_properties(
+    preload
+    PROPERTIES
+        C_STANDARD 99
 )
 
 install(
@@ -26,7 +38,15 @@ install(
 add_library(_process_tracker MODULE)
 add_library(process_tracker::_process_tracker ALIAS _process_tracker)
 
+set_target_properties(
+    _process_tracker
+    PROPERTIES
+        C_STANDARD 99
+)
+
 python_extension_module(_process_tracker)
+
+target_cython_sources(_process_tracker _process_tracker.pyx)
 
 target_link_libraries(
     _process_tracker
@@ -36,8 +56,6 @@ target_link_libraries(
         plthook::plthook
         process_tracker::utils
 )
-
-target_cython_sources(_process_tracker _process_tracker.pyx)
 
 install(
     TARGETS

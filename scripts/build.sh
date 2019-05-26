@@ -1,5 +1,6 @@
 #!/bin/sh
 # Build sdist and wheel.
+set -e
 dist=dist
 venv=.build-venv
 venv_python=$venv/bin/python
@@ -19,3 +20,5 @@ print(" ".join(quote(r) for r in d["build-system"]["requires"]))
 ')
 $venv_python setup.py sdist
 $venv_pip wheel --wheel-dir dist dist/*.tar.gz
+auditwheel repair --wheel-dir dist/ dist/*-linux_x86_64.whl
+rm dist/*-linux_x86_64.whl
