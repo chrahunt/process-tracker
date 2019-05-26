@@ -1,10 +1,11 @@
 from .elf cimport Elf64_Addr, Elf64_Half, Elf64_Ehdr, Elf64_Phdr
 
 
-DEF _GNU_SOURCE
+DEF _GNU_SOURCE = 1
 
 
-extern from "link.h":
+cdef extern from "link.h":
+    # Actual implementations.
     """
     typedef ElfW(Addr) ElfW_Addr;
     typedef ElfW(Ehdr) ElfW_Ehdr;
@@ -17,7 +18,7 @@ extern from "link.h":
     ctypedef Elf64_Half ElfW_Half
     ctypedef Elf64_Phdr ElfW_Phdr
 
-    ctypedef struct dl_phdr_info:
+    cdef struct dl_phdr_info:
         ElfW_Addr dlpi_addr
         const char * dlpi_name
         const ElfW_Phdr * dlpi_phdr

@@ -21,13 +21,13 @@ cimport plthook
 
 from contextlib import contextmanager
 from cpython.exc cimport PyErr_Format
+from cython.operator cimport postincrement as postinc
 from libc.stdlib cimport malloc
 from libc.string cimport strlen, strncmp
 from posix.types cimport pid_t
 from posix.unistd cimport fork
 
-from .includes cimport elf
-from .support.file_view import FileView
+from .includes cimport elf, link
 from .utils cimport write_identity
 
 
@@ -52,91 +52,58 @@ cdef void * to_void_p(object ptr):
     return <void *><size_t> ptr
 
 
-ELF_MAGIC = b'\x7fELF'
+cdef class Phdrs:
+
+    cdef list headers
+
+    def __cinit__(self):
+        self.headers = []
 
 
-def get_process_maps():
-    """Retrieve process map sections.
-
-    Yielded values should not be used after generator is exhausted.
-    """
-    Entry = namedtuple('Entry', ['start', 'end', 'length', 'rest', 'line'])
-
-    def get_maps():
-        with open('/proc/self/maps', 'r', encoding='utf-8') as f:
-            for line in f:
-                addresses, protection, rest = line.split(maxsplit=2)
-                if not protection.startswith('r'):
-                    continue
-
-                start, end = [int(v, 16) for v in addresses.split('-')]
-                length = end - start
-
-                yield Entry(start, end, length, rest, line)
-
-    with open('/proc/self/mem', 'rb') as f:
-        for entry in get_maps():
-            if '[vsyscall]' in entry.rest:
-                # Skip since the offset is larger than what can be represented
-                # with ssize_t.
-                # Attempting to seek to location in memory fails with EIO.
-                continue
-
-            if '[vvar]' in entry.rest:
-                # Skip due to EIO.
-                continue
-
-            try:
-                f.seek(entry.start)
-                view = FileView(f, entry.start, entry.end)
-            except:
-                logging.exception(f'Error reading {entry.line}')
-                raise
-            else:
-                yield entry.start, view
+cdef class Phdr:
+    cdef link.ElfW_Addr dlpi_addr
+    cdef const char * dlpi_name
+    cdef const link.ElfW_Phdr * dlpi_phdr
+    cdef link.ElfW_Half dlpi_phnum
 
 
-def get_libs():
-    for offset, mem in get_process_maps():
-        if mem.read(4) != ELF_MAGIC:
-            continue
-        yield offset, mem
+cdef int callback(link.dl_phdr_info * info, size_t _, void * data):
+    phdr = Phdr()
+    phdr.dlpi_addr = info.dlpi_addr
+    phdr.dlpi_name = info.dlpi_name
+    phdr.dlpi_phdr = info.dlpi_phdr
+    phdr.dlpi_phnum = info.dlpi_phnum
+    phdrs = <Phdrs?><object> data
+    phdrs.headers.append(phdr)
 
 
-def get_lib_pointer(offset, lib):
+def get_phdr_objs():
+    phdr = Phdrs()
+    link.dl_iterate_phdr(callback, <void *> phdr)
+    return phdr.headers
+
+
+def get_lib_pointer(phdr_obj):
     """Get a valid pointer in the library to pass to dladdr.
     """
-    # TODO: 32-bit.
-    logger.debug('Processing library at %s', hex(offset))
-
-    # Read and cast to ELF header.
-    lib.seek(0)
-    data = lib.read(sizeof(elf.Elf64_Ehdr))
-    cdef elf.Elf64_Ehdr * elf_header = <elf.Elf64_Ehdr *>(<char *> data)
-
+    cdef Phdr phdr = <Phdr?> phdr_obj
     # Extract values.
-    headers_start = elf_header.e_phoff
-    num_headers = elf_header.e_phnum
-    header_size = elf_header.e_phentsize
-    headers_end = headers_start + num_headers * header_size
+    offset = phdr.dlpi_addr
+    num_headers = phdr.dlpi_phnum
 
-    cdef elf.Elf64_Phdr * header = NULL
+    cdef link.ElfW_Phdr * pos = phdr.dlpi_phdr
+    cdef link.ElfW_Phdr * current = NULL
 
     # Iterate over each program header.
-    for pos in range(headers_start, headers_end, header_size):
-        lib.seek(pos)
-        data = lib.read(header_size)
-        header = <elf.Elf64_Phdr *>(<char *> data)
-        if header.p_type == PT_LOAD and header.p_memsz != 0:
-            return offset + header.p_vaddr
+    for _ in range(num_headers):
+        current = postinc(pos)
+        if current.p_type == PT_LOAD and current.p_memsz != 0:
+            return offset + current.p_vaddr
 
 
 def _fail(msg):
     cause = str(plthook.plthook_error(), encoding='utf-8')
     raise RuntimeError(f'{msg} failed due to: {cause}')
-
-
-ctypedef plthook.plthook_t (*address_callback_t)()
 
 
 cdef class CallbackInfo:
@@ -259,18 +226,6 @@ cdef class Func:
 
 
 @contextmanager
-def plthook_open_executable():
-    cdef plthook.plthook_t * hook
-    if plthook.plthook_open(&hook, NULL):
-        _fail('plthook_open_executable')
-
-    try:
-        yield <size_t>hook
-    finally:
-        plthook.plthook_close(hook)
-
-
-@contextmanager
 def plthook_open_by_address(address):
     logger.debug('plthook_open_by_address(%s)', address)
     cdef plthook.plthook_t * hook
@@ -305,9 +260,9 @@ def install():
     # Loaded shared libraries.
 
     def hook_providers():
-        libs = get_libs()
-        for offset, lib in libs:
-            ptr = get_lib_pointer(offset, lib)
+        libs = get_phdr_objs()
+        for phdr in libs:
+            ptr = get_lib_pointer(phdr)
             if not ptr:
                 continue
             logger.debug('Pointer value: %d', ptr)
@@ -323,7 +278,7 @@ def install():
     callback_info.self = callback
     cdef void * ptr = callback.ptr()
 
-    for hook_provider in chain([plthook_open_executable], hook_providers()):
+    for hook_provider in hook_providers():
         callback_info.get_hook = hook_provider
 
         with hook_provider() as hook_ptr:
