@@ -3,7 +3,7 @@ import io
 
 import pytest
 
-from process_tracker._lib._process_tracker import FileView
+from process_tracker._internal.support.file_view import FileView
 
 
 def _raises_on_sub_zero_seek(f):

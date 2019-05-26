@@ -20,16 +20,7 @@ target_link_libraries(
 install(
     TARGETS
     preload
-    LIBRARY DESTINATION src/process_tracker/_lib
-)
-
-add_library(plthook STATIC plthook.c)
-add_library(process_tracker::plthook ALIAS plthook)
-
-target_link_libraries(
-    plthook
-    PUBLIC
-        process_tracker::vendor_headers
+    LIBRARY DESTINATION src/process_tracker/_internal
 )
 
 add_library(_process_tracker MODULE)
@@ -42,7 +33,7 @@ target_link_libraries(
     # We don't speecify visibiity because it conflicts with the
     # target_liink_libraries call in python_extension_module.
     #PRIVATE
-        process_tracker::plthook
+        plthook::plthook
         process_tracker::utils
 )
 
@@ -51,5 +42,5 @@ target_cython_sources(_process_tracker _process_tracker.pyx)
 install(
     TARGETS
     _process_tracker
-    LIBRARY DESTINATION src/process_tracker/_lib
+    LIBRARY DESTINATION src/process_tracker/_internal
 )

@@ -1,0 +1,3 @@
+[submodule "src/process_tracker/_vendor/plthook"]
+	path = src/process_tracker/_vendor/plthook
+	url = https://github.com/kubo/plthook.git

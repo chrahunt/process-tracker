@@ -1,2 +1,1 @@
-add_subdirectory(_vendor)
-add_subdirectory(_src)
+add_subdirectory(process_tracker)

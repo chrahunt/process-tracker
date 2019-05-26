@@ -9,7 +9,7 @@ from importlib.resources import path
 from pathlib import Path
 from typing import ContextManager, List, Tuple
 
-from ._lib import _process_tracker
+from ._internal import _process_tracker
 
 
 __all__ = ['install', 'children']
@@ -71,7 +71,7 @@ def install():
 
     os.environ['SHIM_PID_DIR'] = _pid_dir
     os.environ['LD_PRELOAD'] = str(
-        _close_atexit(path('process_tracker._lib', 'libpreload.so'))
+        _close_atexit(path('process_tracker._internal', 'libpreload.so'))
     )
 
     logger.debug('LD_PRELOAD path: %s', os.environ['LD_PRELOAD'])
