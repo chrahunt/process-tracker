@@ -1,0 +1,19 @@
+---
+name: build-manylinux1
+
+author: Chris Hunt <chrahunt@gmail.com>
+description: Build a manylinux1 wheel
+inputs:
+  python-version:
+    description:
+      The python version to use, one of cp27, cp34, cp35, cp36,
+      cp37, or cp38.
+outputs:
+  wheel-path:
+    description: The path to the built wheel, relative to the source root
+  sdist-path:
+    description: The path to the generated sdist
+runs:
+  using: docker
+  image: Dockerfile
+  args: ['${{ inputs.python-version }}']
